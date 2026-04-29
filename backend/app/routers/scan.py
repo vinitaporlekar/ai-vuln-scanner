@@ -2,7 +2,8 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 import os
 import uuid
 from datetime import datetime
-from app.scanner import scan_code  # <-- NEW LINE: import the scanner
+from app.scanner import scan_code  
+from app.rag_engine import load_cve_data, search_similar_cves, generate_ai_explanation
 
 # Create a router — a mini-app for scan-related endpoints
 router = APIRouter(
@@ -90,3 +91,62 @@ async def analyze_file(scan_id: str):
     results["scan_id"] = scan_id
     
     return results
+
+@router.post("/analyze-ai/{scan_id}")
+async def analyze_with_ai(scan_id: str):
+    """
+    The SMART version of analyze.
+    Uses RAG to match vulnerabilities with real CVEs
+    and generates AI-powered explanations.
+    """
+    
+    # Step 1: Find and read the file (same as before)
+    files = os.listdir(UPLOAD_DIR)
+    target = None
+    for f in files:
+        if f.startswith(scan_id):
+            target = f
+            break
+    
+    if not target:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No file found with scan_id '{scan_id}'"
+        )
+    
+    file_path = os.path.join(UPLOAD_DIR, target)
+    with open(file_path, "r") as f:
+        code = f.read()
+    
+    # Step 2: Run the basic scanner first
+    from app.scanner import scan_code
+    basic_results = scan_code(code, target)
+    
+    # Step 3: For each vulnerability found, use RAG
+    enriched_vulns = []
+    for vuln in basic_results["vulnerabilities"]:
+        # Search ChromaDB for similar known CVEs
+        search_text = f"{vuln['rule']}. {vuln['message']} Code: {vuln['code']}"
+        cve_matches = search_similar_cves(search_text, top_k=2)
+        
+        # Generate AI explanation
+        ai_explanation = generate_ai_explanation(
+            vuln["code"], vuln, cve_matches
+        )
+        
+        # Add the RAG results to the vulnerability
+        enriched_vulns.append({
+            **vuln,  # Keep all original fields
+            "matched_cves": cve_matches,
+            "ai_explanation": ai_explanation
+        })
+    
+    return {
+        "scan_id": scan_id,
+        "filename": target,
+        "total_lines": basic_results["total_lines"],
+        "risk_score": basic_results["risk_score"],
+        "severity_counts": basic_results["severity_counts"],
+        "vulnerabilities": enriched_vulns,
+        "analysis_type": "AI-powered (RAG + Gemini)"
+    }
