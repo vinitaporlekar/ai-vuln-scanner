@@ -2,6 +2,7 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 import os
 import uuid
 from datetime import datetime
+from app.scanner import scan_code  # <-- NEW LINE: import the scanner
 
 # Create a router — a mini-app for scan-related endpoints
 router = APIRouter(
@@ -57,3 +58,35 @@ async def upload_code_file(file: UploadFile = File(...)):
         "message": f"'{file.filename}' uploaded! Ready to scan.",
         "uploaded_at": datetime.now().isoformat()
     }
+
+@router.post("/analyze/{scan_id}")
+async def analyze_file(scan_id: str):
+    """
+    Takes a scan_id from a previous upload,
+    reads that file, and scans it for vulnerabilities.
+    """
+    
+    # Find the file matching this scan_id
+    files = os.listdir(UPLOAD_DIR)
+    target = None
+    for f in files:
+        if f.startswith(scan_id):
+            target = f
+            break
+    
+    if not target:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No file found with scan_id '{scan_id}'"
+        )
+    
+    # Read the file
+    file_path = os.path.join(UPLOAD_DIR, target)
+    with open(file_path, "r") as f:
+        code = f.read()
+    
+    # Run the scanner
+    results = scan_code(code, target)
+    results["scan_id"] = scan_id
+    
+    return results
