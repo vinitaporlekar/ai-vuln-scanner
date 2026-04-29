@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import scan
+from app.rag_engine import load_cve_data
 
 app = FastAPI(
     title="Vulnerability Scanner API",
@@ -17,6 +18,10 @@ app.add_middleware(
 )
 
 app.include_router(scan.router)
+
+@app.on_event("startup")
+def startup_event():
+    load_cve_data()
 
 @app.get("/")
 def read_root():
