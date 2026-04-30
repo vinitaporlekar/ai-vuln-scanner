@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 from app.scanner import scan_code  
 from app.rag_engine import load_cve_data, search_similar_cves, generate_ai_explanation
+from app.github_connector import parse_github_url, fetch_repo_files, fetch_file_content
 
 # Create a router — a mini-app for scan-related endpoints
 router = APIRouter(
@@ -149,4 +150,60 @@ async def analyze_with_ai(scan_id: str):
         "severity_counts": basic_results["severity_counts"],
         "vulnerabilities": enriched_vulns,
         "analysis_type": "AI-powered (RAG + Gemini)"
+    }
+@router.post("/paste")
+async def scan_pasted_code(payload: dict):
+    """Scan code pasted directly by the developer."""
+    
+    code = payload.get("code", "")
+    filename = payload.get("filename", "pasted_code.py")
+    
+    if not code.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="No code provided."
+        )
+    
+    from app.scanner import scan_code
+    results = scan_code(code, filename)
+    results["scan_id"] = str(uuid.uuid4())[:8]
+    
+    return results
+@router.post("/github")
+async def scan_github_repo(payload: dict):
+    url = payload.get("url", "")
+    parsed = parse_github_url(url)
+    if not parsed:
+        raise HTTPException(status_code=400, detail="Invalid GitHub URL")
+    
+    owner, repo = parsed["owner"], parsed["repo"]
+    repo_info = await fetch_repo_files(owner, repo)
+    
+    if "error" in repo_info:
+        raise HTTPException(status_code=400, detail=repo_info["error"])
+    
+    from app.scanner import scan_code
+    files_to_scan = repo_info["files"][:15]
+    all_vulns = []
+    file_reports = []
+    total_severity = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    
+    for file_info in files_to_scan:
+        content = await fetch_file_content(owner, repo, file_info["path"])
+        if not content:
+            continue
+        result = scan_code(content, file_info["path"])
+        if result["vulnerabilities"]:
+            file_reports.append({"file": file_info["path"], "vulnerabilities": result["vulnerabilities"]})
+            all_vulns.extend(result["vulnerabilities"])
+            for sev in total_severity:
+                total_severity[sev] += result["severity_counts"].get(sev, 0)
+    
+    return {
+        "owner": owner, "repo": repo,
+        "files_scanned": len(files_to_scan),
+        "risk_score": min(100, total_severity["CRITICAL"]*25 + total_severity["HIGH"]*15 + total_severity["MEDIUM"]*5 + total_severity["LOW"]),
+        "total_vulnerabilities": len(all_vulns),
+        "severity_counts": total_severity,
+        "file_reports": file_reports
     }
