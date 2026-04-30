@@ -150,3 +150,34 @@ async def analyze_with_ai(scan_id: str):
         "vulnerabilities": enriched_vulns,
         "analysis_type": "AI-powered (RAG + Gemini)"
     }
+@router.post("/paste")
+async def scan_pasted_code(payload: dict):
+    """
+    Scan code that a developer pastes directly.
+    No file upload needed — just paste and scan.
+    
+    Expects: {
+        "code": "import pickle\npassword = 'admin123'",
+        "filename": "main.py"  (optional, helps identify language)
+    }
+    """
+    
+    code = payload.get("code", "")
+    filename = payload.get("filename", "pasted_code.py")
+    
+    if not code.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="No code provided. Paste your code in the 'code' field."
+        )
+    
+    # Run the scanner
+    from app.scanner import scan_code
+    results = scan_code(code, filename)
+    
+    # Generate a scan_id
+    import uuid
+    scan_id = str(uuid.uuid4())[:8]
+    results["scan_id"] = scan_id
+    
+    return results
